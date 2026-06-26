@@ -1,0 +1,28 @@
+{
+  "n_examples": 15,
+  "fact_extraction": {
+    "json_parse_rate": 1.0,
+    "facts_per_doc_mean": 2.066666666666667,
+    "facts_per_doc_stdev": 0.7988086367179802,
+    "hallucination_rate": 0.08823529411764706,
+    "recall_vs_expected_mean": 0.6166666666666667,
+    "criticality_mean": 4.612903225806452,
+    "criticality_dist": {
+      "5": 21,
+      "4": 8,
+      "3": 2
+    }
+  },
+  "counterfactual": {
+    "n_generated": 31,
+    "self_copy_rate": 0.0,
+    "length_ratio_mean": 0.995492937397509,
+    "length_ratio_stdev": 0.027102982502072576,
+    "fact_still_present_rate": 0.0967741935483871
+  },
+  "judge": {
+    "accuracy_on_positive_q_dplus": 0.8666666666666667,
+    "accuracy_on_negative_q_unrelated": 1,
+    "accuracy_on_counterfactual_q_dminus": 0.6129032258064516
+  }
+}
