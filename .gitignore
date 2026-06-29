@@ -68,9 +68,7 @@ models/
 # ──────────────────────────────────────────────────────────────────────
 # Данные
 # ──────────────────────────────────────────────────────────────────────
-# RuBQ грузится из HF при каждом запуске — в репо не нужно.
-# Если в `data/` будут лежать только рукотворные/маленькие файлы,
-# подключённые к скриптам — добавь их через `git add -f path/to/file.jsonl`.
+# Базовые корпуса — грузятся из HF, в репо не нужны
 data/rubq/
 data/mmarco/
 data/miracl/
@@ -81,6 +79,11 @@ data/positives_*.jsonl
 data/*_full.jsonl
 data/*.tsv.gz
 data/*.parquet
+
+# Сгенерированные training data в data/train/ — большие, легко перегенерить
+# через 07_build_train_data.py. НО оставляем split.json, summary.json, report.md
+# (мелкие, фиксируют состав ablation grid для воспроизводимости).
+data/train/*.jsonl
 
 # Но рукотворный sanity-набор оставляем в git
 !data/sanity_examples.jsonl

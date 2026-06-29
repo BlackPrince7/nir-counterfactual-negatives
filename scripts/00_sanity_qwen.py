@@ -5,8 +5,9 @@ Phase 0: Sanity check Qwen2.5-7B на рукотворных 15 примерах
 Что измеряем:
   1. Fact extraction:
      - доля валидного JSON
-     - hallucination rate (факт не verbatim в d⁺)
-     - recall vs expected_mutable_facts
+     - hallucination rate (факт не verbatim в d⁺ И не морф-вариант)
+     - morphological_variant rate (не verbatim, но проходит fuzzy)
+     - recall vs expected_mutable_facts (через fuzzy_in, по ВСЕМ извлечённым фактам)
      - распределение criticality
   2. Counterfactual mutation:
      - self-similarity rate (LLM вернула оригинал)
@@ -18,7 +19,7 @@ Phase 0: Sanity check Qwen2.5-7B на рукотворных 15 примерах
 
 Выход:
   outputs/sanity/
-    ├── facts.jsonl         — все извлечённые факты
+    ├── facts.jsonl         — все извлечённые факты с полем match_status
     ├── counterfactuals.jsonl
     ├── judge.jsonl
     ├── metrics.json
@@ -26,6 +27,9 @@ Phase 0: Sanity check Qwen2.5-7B на рукотворных 15 примерах
 
 Запуск:
   python scripts/00_sanity_qwen.py --config configs/default.yaml
+
+Версия: Phase 0.5 fix — recall считается по all_facts (не valid_facts),
+                       морф-варианты выделены отдельно от честных галлюцинаций.
 """
 from __future__ import annotations
 
@@ -87,6 +91,34 @@ def save_jsonl(path: Path, records: list[dict]) -> None:
 # ──────────────────────────────────────────────────────────────────────
 # Этап 1: Fact extraction
 # ──────────────────────────────────────────────────────────────────────
+#
+# АРХИТЕКТУРНАЯ ЛОГИКА (важно):
+#
+#   У извлечённого факта три возможных статуса по отношению к d⁺:
+#
+#     1. "verbatim"             — точная подстрока d⁺ (strict in-check).
+#                                 Только такие факты идут в CN-промпт, т.к. LLM
+#                                 должна физически найти и заменить подстроку.
+#     2. "morphological_variant"— не подстрока, но fuzzy_in() == True.
+#                                 Это правильно извлечённый факт, просто в другой
+#                                 морфологической форме. НЕ галлюцинация.
+#                                 Не годится для CN-промпта в текущем виде.
+#     3. "hallucinated"         — не подстрока И не проходит fuzzy_in.
+#                                 Настоящая выдумка, не присутствует в d⁺.
+#
+#   Recall vs expected_mutable_facts должен считаться по ВСЕМ извлечённым фактам
+#   (категории 1 и 2), потому что это метрика поведения модели — извлекла она
+#   нужное содержание или нет. Старый код считал только по категории 1, что
+#   занижало recall на русской морфологии.
+
+def _classify_fact(fact_text: str, d_plus: str) -> str:
+    """Вернуть один из 'verbatim' / 'morphological_variant' / 'hallucinated'."""
+    if fact_text in d_plus:
+        return "verbatim"
+    if fuzzy_in(fact_text, d_plus):
+        return "morphological_variant"
+    return "hallucinated"
+
 
 def run_fact_extraction(llm, examples: list[dict]) -> list[dict]:
     """Возвращает по записи на каждый пример с полной диагностикой."""
@@ -99,6 +131,8 @@ def run_fact_extraction(llm, examples: list[dict]) -> list[dict]:
         pbar = None
 
     results = []
+    lost_for_cn: list[str] = []  # qid, у которых 0 verbatim-фактов → выпадают из CN
+
     for ex in examples:
         msgs = build_fact_extraction_messages(ex["query"], ex["d_plus"])
         raw = llm.generate([msgs])[0]
@@ -106,7 +140,11 @@ def run_fact_extraction(llm, examples: list[dict]) -> list[dict]:
         parsed = extract_json(raw)
         valid_json = isinstance(parsed, list)
 
-        all_facts, valid_facts, hallucinated = [], [], []
+        all_facts: list[dict] = []
+        valid_facts: list[dict] = []        # verbatim в d⁺ — годятся для CN
+        morph_variant_facts: list[dict] = []  # морф-вариант — НЕ галлюцинация
+        hallucinated_facts: list[dict] = []   # настоящая галлюцинация
+
         if valid_json:
             for item in parsed:
                 if not isinstance(item, dict) or "text" not in item:
@@ -116,18 +154,32 @@ def run_fact_extraction(llm, examples: list[dict]) -> list[dict]:
                     "type": str(item.get("type", "")).strip(),
                     "criticality": int(item.get("criticality", 0)),
                 }
+                status = _classify_fact(fact["text"], ex["d_plus"])
+                fact["match_status"] = status
                 all_facts.append(fact)
-                if fact["text"] in ex["d_plus"]:
-                    valid_facts.append(fact)
-                else:
-                    hallucinated.append(fact)
 
+                if status == "verbatim":
+                    valid_facts.append(fact)
+                elif status == "morphological_variant":
+                    morph_variant_facts.append(fact)
+                else:  # "hallucinated"
+                    hallucinated_facts.append(fact)
+
+        # Recall теперь по ВСЕМ извлечённым фактам (verbatim + морф-варианты).
+        # Тем самым он отражает способность модели вытащить факт по содержанию,
+        # а не способность пройти строгий verbatim-чек.
         expected = ex["expected_mutable_facts"]
         covered = [
             e for e in expected
-            if any(fuzzy_in(e, f["text"]) for f in valid_facts)
+            if any(fuzzy_in(e, f["text"]) for f in all_facts)
         ]
         recall = len(covered) / len(expected) if expected else 0.0
+
+        # Каскадная потеря: 0 verbatim-фактов → CN-пайплайн пропустит пример,
+        # хотя модель что-то извлекла. Логируем явно.
+        cn_lost = bool(all_facts) and not valid_facts
+        if cn_lost:
+            lost_for_cn.append(ex["qid"])
 
         results.append({
             "qid": ex["qid"],
@@ -138,21 +190,37 @@ def run_fact_extraction(llm, examples: list[dict]) -> list[dict]:
             "valid_json": valid_json,
             "all_facts": all_facts,
             "valid_facts": valid_facts,
-            "hallucinated_facts": hallucinated,
+            "morph_variant_facts": morph_variant_facts,
+            "hallucinated_facts": hallucinated_facts,
             "covered_expected": covered,
             "recall_vs_expected": recall,
+            "cn_lost": cn_lost,
         })
         log.info(
-            "  %s: json=%s facts=%d valid=%d hallu=%d recall=%.2f",
+            "  %s: json=%s facts=%d verbatim=%d morph=%d hallu=%d recall=%.2f%s",
             ex["qid"], valid_json, len(all_facts),
-            len(valid_facts), len(hallucinated), recall,
+            len(valid_facts), len(morph_variant_facts),
+            len(hallucinated_facts), recall,
+            "  [LOST FOR CN]" if cn_lost else "",
         )
         if pbar:
-            pbar.set_postfix(recall=f"{recall:.0%}", facts=len(valid_facts))
+            pbar.set_postfix(recall=f"{recall:.0%}",
+                             verbatim=len(valid_facts),
+                             morph=len(morph_variant_facts))
             pbar.update(1)
 
     if pbar:
         pbar.close()
+
+    if lost_for_cn:
+        log.warning(
+            "⚠️  %d пример(ов) выпали из CN-пайплайна (0 verbatim-фактов, но факты извлечены): %s",
+            len(lost_for_cn), ", ".join(lost_for_cn),
+        )
+        log.warning(
+            "   Это означает: модель достала факт в другой морф-форме, CN-промпт не сможет его найти и заменить."
+        )
+
     return results
 
 
@@ -167,6 +235,8 @@ def run_counterfactuals(
 
     pairs, batch_msgs = [], []
     for fr in fact_results:
+        # CN использует ТОЛЬКО verbatim-факты — это правильно, иначе LLM не сможет
+        # физически найти и подменить подстроку в d⁺.
         top = sorted(fr["valid_facts"], key=lambda f: -f["criticality"])[:k_facts]
         for fact in top:
             pairs.append((fr, fact))
@@ -231,8 +301,6 @@ def run_judge(
         log.warning("Неизвестный judge_mode=%r — fallback на 'cot'", mode)
         mode = "cot"
     log.info("=== Этап 3: LLM judge (mode=%s) ===", mode)
-
-    by_qid = {e["qid"]: e for e in examples}
 
     # Готовим все пары для одного батч-прогона
     pairs, kinds, qids = [], [], []
@@ -302,13 +370,28 @@ def compute_metrics(facts, cfs, judge):
     n = len(facts)
     # Fact extraction
     json_ok_rate = sum(f["valid_json"] for f in facts) / n if n else 0.0
-    facts_per_doc = [len(f["valid_facts"]) for f in facts]
-    hallu_rate = (
-        sum(len(f["hallucinated_facts"]) for f in facts)
-        / max(1, sum(len(f["all_facts"]) for f in facts))
-    )
+
+    # facts_per_doc — считаем по verbatim-фактам (это то, что реально пойдёт в CN)
+    facts_per_doc_verbatim = [len(f["valid_facts"]) for f in facts]
+    facts_per_doc_total    = [len(f["all_facts"])   for f in facts]
+
+    total_all   = max(1, sum(len(f["all_facts"]) for f in facts))
+    total_hallu = sum(len(f["hallucinated_facts"]) for f in facts)
+    total_morph = sum(len(f.get("morph_variant_facts", [])) for f in facts)
+
+    # Истинная hallucination rate — только настоящие выдумки, без морф-вариантов
+    hallu_rate = total_hallu / total_all
+    # Отдельно — доля морф-вариантов (показатель русского NLP-шума, а не качества LLM)
+    morph_rate = total_morph / total_all
+    # Старая (strict) метрика для сравнения с предыдущими прогонами
+    strict_hallu_rate = (total_hallu + total_morph) / total_all
+
     recalls = [f["recall_vs_expected"] for f in facts]
+    # criticality считаем по фактам, годным для CN
     crits = [it["criticality"] for f in facts for it in f["valid_facts"]]
+
+    # Каскадные потери для CN
+    lost_for_cn = [f["qid"] for f in facts if f.get("cn_lost")]
 
     # Counterfactual
     cf_self = (
@@ -331,10 +414,15 @@ def compute_metrics(facts, cfs, judge):
         "n_examples": n,
         "fact_extraction": {
             "json_parse_rate": json_ok_rate,
-            "facts_per_doc_mean": mean(facts_per_doc) if facts_per_doc else 0,
-            "facts_per_doc_stdev": stdev(facts_per_doc) if len(facts_per_doc) > 1 else 0,
+            "facts_per_doc_verbatim_mean": mean(facts_per_doc_verbatim) if facts_per_doc_verbatim else 0,
+            "facts_per_doc_verbatim_stdev": stdev(facts_per_doc_verbatim) if len(facts_per_doc_verbatim) > 1 else 0,
+            "facts_per_doc_total_mean": mean(facts_per_doc_total) if facts_per_doc_total else 0,
             "hallucination_rate": hallu_rate,
+            "morph_variant_rate": morph_rate,
+            "strict_hallucination_rate_legacy": strict_hallu_rate,
             "recall_vs_expected_mean": mean(recalls) if recalls else 0,
+            "n_examples_lost_for_cn": len(lost_for_cn),
+            "examples_lost_for_cn": lost_for_cn,
             "criticality_mean": mean(crits) if crits else 0,
             "criticality_dist": dict(Counter(crits)),
         },
@@ -370,10 +458,15 @@ def write_report(facts, cfs, judge, metrics, output_dir: Path):
     jm = metrics["judge"]
     lines.append("### Fact extraction")
     lines.append(f"- JSON parse rate: **{fe['json_parse_rate']:.1%}**")
-    lines.append(f"- Фактов на документ: **{fe['facts_per_doc_mean']:.1f} ± {fe['facts_per_doc_stdev']:.1f}**")
-    lines.append(f"- Hallucination rate (факт не в d⁺): **{fe['hallucination_rate']:.1%}**")
-    lines.append(f"- Recall vs expected_mutable_facts: **{fe['recall_vs_expected_mean']:.1%}**")
-    lines.append(f"- Средняя criticality: **{fe['criticality_mean']:.2f}**, распределение: `{fe['criticality_dist']}`")
+    lines.append(f"- Verbatim-фактов на документ: **{fe['facts_per_doc_verbatim_mean']:.1f} ± {fe['facts_per_doc_verbatim_stdev']:.1f}** (то, что идёт в CN)")
+    lines.append(f"- Всего фактов на документ: **{fe['facts_per_doc_total_mean']:.1f}** (verbatim + морф-варианты + галлюцинации)")
+    lines.append(f"- Hallucination rate (честная, без морф-вариантов): **{fe['hallucination_rate']:.1%}**")
+    lines.append(f"- Morphological variant rate: **{fe['morph_variant_rate']:.1%}** *(факт извлечён правильно, но не verbatim в d⁺)*")
+    lines.append(f"- Strict-hallu rate (legacy, для сравнения с предыдущими прогонами): **{fe['strict_hallucination_rate_legacy']:.1%}**")
+    lines.append(f"- Recall vs expected_mutable_facts (через fuzzy_in по ВСЕМ извлечённым): **{fe['recall_vs_expected_mean']:.1%}**")
+    if fe["examples_lost_for_cn"]:
+        lines.append(f"- ⚠️ Примеров потеряно для CN (0 verbatim, но факты были): **{fe['n_examples_lost_for_cn']}** — `{fe['examples_lost_for_cn']}`")
+    lines.append(f"- Средняя criticality (по verbatim-фактам): **{fe['criticality_mean']:.2f}**, распределение: `{fe['criticality_dist']}`")
     lines.append("")
     lines.append("### Counterfactual")
     lines.append(f"- Сгенерировано: **{cm['n_generated']}**")
@@ -405,6 +498,8 @@ def write_report(facts, cfs, judge, metrics, output_dir: Path):
         lines.append("")
         lines.append(f"**Ожидаемые факты**: {f['expected_facts']}")
         lines.append(f"**Покрыто**: {f['covered_expected']} (recall={f['recall_vs_expected']:.0%})")
+        if f.get("cn_lost"):
+            lines.append("⚠️  **CN-пайплайн пропустит этот пример** — нет verbatim-фактов, есть только морф-варианты.")
         lines.append("")
         if not f["valid_json"]:
             lines.append("⚠️  **JSON не распарсился**. Raw:")
@@ -412,18 +507,25 @@ def write_report(facts, cfs, judge, metrics, output_dir: Path):
             lines.append(f["raw_output"][:500])
             lines.append("```")
 
-        if f["valid_facts"]:
+        # Все извлечённые факты единой таблицей с явным статусом
+        if f["all_facts"]:
             lines.append("**Извлечённые факты:**")
             lines.append("")
-            lines.append("| text | type | crit |")
-            lines.append("|---|---|---|")
-            for ff in f["valid_facts"]:
+            lines.append("| text | type | crit | статус |")
+            lines.append("|---|---|---|---|")
+            status_icon = {
+                "verbatim": "✓ verbatim",
+                "morphological_variant": "≈ морф-вариант",
+                "hallucinated": "✗ галлюцинация",
+            }
+            for ff in f["all_facts"]:
                 tx = ff["text"].replace("|", "\\|")
                 ty = ff["type"].replace("|", "\\|")
-                lines.append(f"| {tx} | {ty} | {ff['criticality']} |")
+                st = status_icon.get(ff.get("match_status", "?"), "?")
+                lines.append(f"| {tx} | {ty} | {ff['criticality']} | {st} |")
             lines.append("")
         if f["hallucinated_facts"]:
-            lines.append("⚠️  **Hallucinated (нет в d⁺):**")
+            lines.append("⚠️  **Hallucinated (не подстрока И не морф-вариант d⁺):**")
             for ff in f["hallucinated_facts"]:
                 lines.append(f"- `{ff['text']}` (type={ff['type']}, crit={ff['criticality']})")
             lines.append("")
@@ -534,18 +636,22 @@ def main():
     cm = metrics["counterfactual"]
     jm = metrics["judge"]
     print(f"Fact extraction:")
-    print(f"  JSON parse:      {fe['json_parse_rate']:.1%}")
-    print(f"  Facts/doc:       {fe['facts_per_doc_mean']:.1f} ± {fe['facts_per_doc_stdev']:.1f}")
-    print(f"  Hallucination:   {fe['hallucination_rate']:.1%}")
-    print(f"  Recall expected: {fe['recall_vs_expected_mean']:.1%}")
+    print(f"  JSON parse:        {fe['json_parse_rate']:.1%}")
+    print(f"  Verbatim/doc:      {fe['facts_per_doc_verbatim_mean']:.1f} ± {fe['facts_per_doc_verbatim_stdev']:.1f}")
+    print(f"  Total/doc:         {fe['facts_per_doc_total_mean']:.1f}")
+    print(f"  Hallucination:     {fe['hallucination_rate']:.1%}  (честная)")
+    print(f"  Morph-variant:     {fe['morph_variant_rate']:.1%}  (правильные факты, не verbatim)")
+    print(f"  Recall expected:   {fe['recall_vs_expected_mean']:.1%}")
+    if fe["examples_lost_for_cn"]:
+        print(f"  Lost for CN:       {fe['n_examples_lost_for_cn']}  -> {fe['examples_lost_for_cn']}")
     print(f"Counterfactual:")
-    print(f"  Self-copy:       {cm['self_copy_rate']:.1%}  (want 0)")
-    print(f"  Length ratio:    {cm['length_ratio_mean']:.2f}±{cm['length_ratio_stdev']:.2f}  (want ~1.0)")
-    print(f"  Fact still in:   {cm['fact_still_present_rate']:.1%}  (want 0)")
+    print(f"  Self-copy:         {cm['self_copy_rate']:.1%}  (want 0)")
+    print(f"  Length ratio:      {cm['length_ratio_mean']:.2f}±{cm['length_ratio_stdev']:.2f}  (want ~1.0)")
+    print(f"  Fact still in:     {cm['fact_still_present_rate']:.1%}  (want 0)")
     print(f"Judge:")
-    print(f"  (q,d⁺)→Да:       {jm['accuracy_on_positive_q_dplus']:.1%}  (want 1.0)")
-    print(f"  (q,unrel)→Нет:   {jm['accuracy_on_negative_q_unrelated']:.1%}  (want 1.0)")
-    print(f"  (q,d⁻)→Нет:      {jm['accuracy_on_counterfactual_q_dminus']:.1%}")
+    print(f"  (q,d⁺)→Да:         {jm['accuracy_on_positive_q_dplus']:.1%}  (want 1.0)")
+    print(f"  (q,unrel)→Нет:     {jm['accuracy_on_negative_q_unrelated']:.1%}  (want 1.0)")
+    print(f"  (q,d⁻)→Нет:        {jm['accuracy_on_counterfactual_q_dminus']:.1%}")
     print(f"\nПодробный отчёт: {out_dir / 'report.md'}")
 
 
