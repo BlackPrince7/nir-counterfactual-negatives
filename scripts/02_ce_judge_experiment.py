@@ -40,10 +40,11 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import mean, median, stdev
 
-import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.config import load_config  # noqa: E402
 
 from src.encoders import EncoderPool  # noqa: E402
 
@@ -368,8 +369,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     cfs = load_jsonl(Path(args.counterfactuals))
     verdicts = load_jsonl(Path(args.judge))
@@ -378,7 +378,7 @@ def main():
     # Энкодеры — это может занять время на первом запуске (скачивание e5-large ~2 GB,
     # bge-m3 ~2 GB в W:\huggingface_cache). После — кэш.
     log.info("Загружаю ансамбль энкодеров (e5-large + bge-m3)…")
-    pool = EncoderPool.from_config(cfg["encoders"])
+    pool = EncoderPool.from_config(cfg.encoders)
     log.info("Готово: %d энкодеров", len(pool.encoders))
 
     # Матчинг CF ↔ judge

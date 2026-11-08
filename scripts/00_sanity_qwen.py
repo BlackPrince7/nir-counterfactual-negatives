@@ -41,7 +41,6 @@ from collections import Counter
 from pathlib import Path
 from statistics import mean, stdev
 
-import yaml
 
 # Корень проекта = родитель папки scripts/
 # Это работает независимо от того, откуда запускается скрипт:
@@ -50,6 +49,8 @@ import yaml
 #   W:\Jupyter\NIR_2\scripts\00_sanity_qwen.py  (абсолютный путь)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.config import load_config  # noqa: E402
 
 from src.llm_client import LLMConfig, make_client, extract_json, parse_yes_no, parse_cot_verdict  # noqa: E402
 from src.prompts import (  # noqa: E402
@@ -595,15 +596,14 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     examples = load_jsonl(Path(args.examples))
     if args.limit:
         examples = examples[: args.limit]
     log.info("Загружено %d примеров", len(examples))
 
-    llm_cfg = LLMConfig.from_dict(cfg["llm"])
+    llm_cfg = cfg.llm
     log.info("LLM: %s (backend=%s)", llm_cfg.model_name, llm_cfg.backend)
     log.info("Judge mode: %s", llm_cfg.judge_mode)
     log.info("pymorphy3: %s", "доступен" if morph_available()

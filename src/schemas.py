@@ -1,46 +1,40 @@
-"""Датаклассы для обмена данными между этапами пайплайны."""
+"""Validated pipeline records; existing JSON field names are preserved."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from pydantic import Field
+from .config import StrictModel, NonEmpty
 from typing import Optional
 
 
-@dataclass
-class QueryDoc:
+class QueryDoc(StrictModel):
     """Входная пара: запрос + положительный документ."""
-    qid: str
-    query: str
-    d_plus: str
-    meta: dict = field(default_factory=dict)
+    qid: NonEmpty
+    query: NonEmpty
+    d_plus: NonEmpty
+    meta: dict = Field(default_factory=dict)
 
 
-@dataclass
-class Fact:
+class Fact(StrictModel):
     """Извлечённый из d⁺ атомарный факт."""
-    text: str
-    type: str
-    criticality: int  # 1-5
+    text: NonEmpty
+    type: NonEmpty
+    criticality: int = Field(ge=1, le=5)
 
     @classmethod
     def from_dict(cls, d: dict) -> "Fact":
-        return cls(
-            text=str(d.get("text", "")).strip(),
-            type=str(d.get("type", "")).strip(),
-            criticality=int(d.get("criticality", 3)),
-        )
+        return cls.model_validate(d)
 
 
-@dataclass
-class NegativeRecord:
+class NegativeRecord(StrictModel):
     """Сгенерированный негатив со всеми диагностиками."""
-    qid: str
-    query: str
-    d_plus: str
-    d_minus: str
+    qid: NonEmpty
+    query: NonEmpty
+    d_plus: NonEmpty
+    d_minus: NonEmpty
     method: str                       # "counterfactual"
     fact_text: str                    # какой факт мутировали
     fact_type: str
-    fact_criticality: int
+    fact_criticality: int = Field(ge=1, le=5)
     delta: float                      # ансамблевое значение
     delta_per_encoder: dict[str, float]
     bm25_overlap: float
@@ -51,16 +45,15 @@ class NegativeRecord:
     rejection_reason: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return self.model_dump(mode="json")
 
 
-@dataclass
-class PositiveRecord:
+class PositiveRecord(StrictModel):
     """Сгенерированный позитивный вариант d⁺ᵢ."""
-    qid: str
-    query: str
-    d_plus: str
-    d_plus_i: str
+    qid: NonEmpty
+    query: NonEmpty
+    d_plus: NonEmpty
+    d_plus_i: NonEmpty
     method: str                       # "gradient"
     target_level: str                 # "near" | "mid" | "far"
     similarity_to_d_plus: float       # ансамблевое значение
@@ -71,4 +64,4 @@ class PositiveRecord:
     rejection_reason: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        return self.model_dump(mode="json")

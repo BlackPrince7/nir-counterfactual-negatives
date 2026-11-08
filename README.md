@@ -1,5 +1,14 @@
 # NIR: Генерация обучающих данных с управляемой семантической сложностью
 
+## Configuration and development
+
+YAML runners now share a validated Pydantic configuration. After creating the
+project virtual environment, validate without GPU or model downloads using
+`.venv/bin/python -m src.config configs/default.yaml`.
+See [configuration and contract tests](docs/configuration.md) and
+[Git workflow](docs/version-control.md). The MVP descriptions below include
+historical design decisions; the production runners document their differences.
+
 Прототип системы генерации обучающих данных (пар/триплетов запрос-документ)
 с контролем уровня семантической сложности для дообучения моделей плотного
 семантического поиска (dense retrieval).

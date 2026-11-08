@@ -18,7 +18,7 @@ faiss-cpu>=1.7.4       # для δ-метрики на большом корпу
 # Data / config
 datasets>=2.20.0
 pyyaml>=6.0
-pydantic>=2.0
+pydantic>=2.0,<3
 jsonlines>=4.0.0
 tqdm>=4.66.0
 numpy>=1.24

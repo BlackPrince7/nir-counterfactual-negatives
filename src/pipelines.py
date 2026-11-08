@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from .config import NegConfig, PosConfig, PosTarget
 from typing import Iterator
 
 from .schemas import QueryDoc, Fact, NegativeRecord, PositiveRecord
@@ -31,13 +31,6 @@ log = logging.getLogger("pipelines")
 # ──────────────────────────────────────────────────────────────────────
 # Counterfactual Negatives
 # ──────────────────────────────────────────────────────────────────────
-
-@dataclass
-class NegConfig:
-    max_facts_per_doc: int = 5
-    max_mutations_per_fact: int = 1
-    min_criticality: int = 3
-
 
 class NegativePipeline:
     def __init__(
@@ -155,20 +148,6 @@ class NegativePipeline:
 # ──────────────────────────────────────────────────────────────────────
 # Gradient Positives
 # ──────────────────────────────────────────────────────────────────────
-
-@dataclass
-class PosTarget:
-    name: str
-    target: float
-    tolerance: float
-
-
-@dataclass
-class PosConfig:
-    branches_per_target: int = 3
-    targets: list[PosTarget] = None
-    must_remain_positive: bool = True
-
 
 class PositivePipeline:
     def __init__(

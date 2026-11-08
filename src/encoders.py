@@ -13,15 +13,7 @@ API:
 from __future__ import annotations
 
 import numpy as np
-from dataclasses import dataclass
-
-
-@dataclass
-class EncoderSpec:
-    name: str
-    weight: float = 1.0
-    query_prefix: str = ""
-    passage_prefix: str = ""
+from .config import EncoderSpec, EncodersConfig
 
 
 class SingleEncoder:
@@ -69,25 +61,14 @@ class EncoderPool:
         self.weights = [e.spec.weight / total_w for e in encoders]
 
     @classmethod
-    def from_config(cls, cfg: dict) -> "EncoderPool":
-        ensemble_cfg = cfg.get("ensemble", [])
-        device = cfg.get("device", "cuda")
-        max_length = cfg.get("max_length", 512)
-        batch_size = cfg.get("batch_size", 32)
+    def from_config(cls, cfg: EncodersConfig | dict) -> "EncoderPool":
+        if not isinstance(cfg, EncodersConfig):
+            cfg = EncodersConfig.model_validate(cfg)
         encoders = [
-            SingleEncoder(
-                EncoderSpec(
-                    name=e["name"],
-                    weight=e.get("weight", 1.0),
-                    query_prefix=e.get("query_prefix", ""),
-                    passage_prefix=e.get("passage_prefix", ""),
-                ),
-                device=device,
-                max_length=max_length,
-            )
-            for e in ensemble_cfg
+            SingleEncoder(spec, device=cfg.device, max_length=cfg.max_length)
+            for spec in cfg.ensemble
         ]
-        return cls(encoders, batch_size=batch_size)
+        return cls(encoders, batch_size=cfg.batch_size)
 
     def similarity_pair(
         self, text_a: str, text_b: str, *, role: str = "qd"

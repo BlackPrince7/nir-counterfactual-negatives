@@ -38,10 +38,11 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median, quantiles, stdev
 
-import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.config import load_config  # noqa: E402
 
 from src.llm_client import LLMConfig, make_client, extract_json  # noqa: E402
 from src.prompts import (  # noqa: E402
@@ -420,8 +421,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     examples = load_jsonl(Path(args.dev_set))
     if args.limit:
@@ -430,7 +430,7 @@ def main():
     log.info("pymorphy3: %s", "доступен" if morph_available() else "НЕТ")
 
     # LLM
-    llm_cfg = LLMConfig.from_dict(cfg["llm"])
+    llm_cfg = cfg.llm
     log.info("LLM: %s (backend=%s)", llm_cfg.model_name, llm_cfg.backend)
     llm = make_client(llm_cfg)
 
@@ -458,7 +458,7 @@ def main():
 
     # Этап 3: encoders + δ
     log.info("Загружаю ансамбль энкодеров…")
-    pool = EncoderPool.from_config(cfg["encoders"])
+    pool = EncoderPool.from_config(cfg.encoders)
     deltas_records = compute_deltas(pool, cfs)
     save_jsonl(out_dir / "deltas.jsonl", deltas_records)
 
@@ -515,7 +515,7 @@ def main():
         print(f"  discard CF with δ > {br['discarded_above']:.3f}")
         print()
         # сравнение с дефолтом
-        default_buckets = cfg["negatives"]["delta_buckets"]
+        default_buckets = [bucket.model_dump() for bucket in cfg.negatives.delta_buckets]
         print("Current default.yaml buckets (для сравнения):")
         for b in default_buckets:
             print(f"  {b['name']:6s}: [{b['min']:.3f}, {b['max']:.3f}]")

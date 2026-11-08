@@ -1,0 +1,5 @@
+# Lightweight contract tests; no GPU/model downloads required.
+pydantic>=2.0,<3
+pyyaml>=6.0,<7
+numpy>=1.24
+pytest>=8,<10

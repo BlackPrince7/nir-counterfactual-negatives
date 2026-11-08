@@ -55,10 +55,12 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import mean, median
 
-import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.config import load_config  # noqa: E402
+from src.data_io import load_query_docs  # noqa: E402
 
 from src.llm_client import LLMConfig, make_client  # noqa: E402
 from src.encoders import EncoderPool  # noqa: E402
@@ -511,8 +513,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     mode_name = "pilot" if args.pilot else "prod"
     n = 10 if args.pilot else args.n_examples
@@ -522,17 +523,17 @@ def main():
     log.info("Режим: %s, output: %s", mode_name, out_dir)
     log.info("Chains per query: %d, max iterations: %d", args.n_chains, args.n_iterations)
 
-    examples = load_jsonl(Path(args.input))
+    examples = [record.model_dump() for record in load_query_docs(args.input)]
     log.info("Загружено пар: %d", len(examples))
     examples = sample_examples(examples, n, seed=args.seed)
     log.info("К обработке: %d", len(examples))
 
-    llm_cfg = LLMConfig.from_dict(cfg["llm"])
+    llm_cfg = cfg.llm
     log.info("LLM: %s (backend=%s)", llm_cfg.model_name, llm_cfg.backend)
     llm = make_client(llm_cfg)
 
     log.info("Загружаю encoders...")
-    pool = EncoderPool.from_config(cfg["encoders"])
+    pool = EncoderPool.from_config(cfg.encoders)
 
     llm_judge = None
     if not args.skip_judge:
@@ -540,8 +541,8 @@ def main():
         llm_judge = LLMJudge(
             llm,
             mode="fast",
-            temperature=cfg["llm"]["judge_temperature"],
-            max_new_tokens_fast=cfg["llm"]["judge_max_new_tokens"],
+            temperature=cfg.llm.judge_temperature,
+            max_new_tokens_fast=cfg.llm.judge_max_new_tokens,
         )
         log.info("LLM-judge: enabled (fast, stopping criterion)")
     else:

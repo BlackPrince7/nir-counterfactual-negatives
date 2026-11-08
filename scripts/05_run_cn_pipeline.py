@@ -66,10 +66,13 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean, median, stdev
 
-import yaml
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.config import load_config  # noqa: E402
+from src.data_io import load_query_docs  # noqa: E402
+from src.schemas import Fact  # noqa: E402
 
 from src.llm_client import LLMConfig, make_client, extract_json  # noqa: E402
 from src.encoders import EncoderPool  # noqa: E402
@@ -164,18 +167,17 @@ def extract_facts(
         for item in parsed:
             if not isinstance(item, dict) or "text" not in item:
                 continue
-            text = str(item.get("text", "")).strip()
-            if not text:
-                continue
             try:
-                crit = int(item.get("criticality", 0))
+                validated = Fact.model_validate(item)
             except (ValueError, TypeError):
-                crit = 0
+                continue
+            text = validated.text.strip()
+            crit = validated.criticality
             if crit < min_criticality:
                 continue
             fact = {
                 "text": text,
-                "type": str(item.get("type", "")).strip(),
+                "type": validated.type,
                 "criticality": crit,
                 "match_status": _classify_fact(text, ex["d_plus"]),
             }
@@ -651,8 +653,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(args.config)
 
     mode_name = "pilot" if args.pilot else "prod"
     n = 10 if args.pilot else args.n_examples
@@ -666,18 +667,18 @@ def main():
              args.bm25_max, args.delta_max, args.mv_max_locality, args.mv_max_blocks)
     log.info("pymorphy3: %s", "доступен" if morph_available() else "НЕТ")
 
-    examples = load_jsonl(Path(args.input))
+    examples = [record.model_dump() for record in load_query_docs(args.input)]
     log.info("Загружено пар: %d", len(examples))
     examples = sample_examples(examples, n, seed=args.seed)
     log.info("К обработке: %d", len(examples))
 
     # Компоненты
-    llm_cfg = LLMConfig.from_dict(cfg["llm"])
+    llm_cfg = cfg.llm
     log.info("LLM: %s (backend=%s)", llm_cfg.model_name, llm_cfg.backend)
     llm = make_client(llm_cfg)
 
     log.info("Загружаю encoders...")
-    pool = EncoderPool.from_config(cfg["encoders"])
+    pool = EncoderPool.from_config(cfg.encoders)
 
     verifier = MutationVerifier(
         max_locality_ratio=args.mv_max_locality,

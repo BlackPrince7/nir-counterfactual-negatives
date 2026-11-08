@@ -8,34 +8,7 @@
 from __future__ import annotations
 import json, re
 from typing import Any
-from dataclasses import dataclass, field
-
-
-@dataclass
-class LLMConfig:
-    model_name: str = "Qwen/Qwen2.5-7B-Instruct"
-    backend: str = "llama_cpp"
-    max_new_tokens: int = 1024
-    temperature: float = 0.7
-    top_p: float = 0.9
-    # judge
-    judge_mode: str = "cot"            # "cot" | "fast"
-    judge_temperature: float = 0.0
-    judge_max_new_tokens: int = 8       # FAST режим
-    judge_cot_max_new_tokens: int = 320 # COT режим: хватает на 4 строки рассуждений
-    # llama_cpp
-    gguf_path: str = r"W:\models\qwen2.5-7b-q4.gguf"
-    n_gpu_layers: int = -1        # -1 = все слои на GPU
-    n_ctx: int = 4096
-    # ollama
-    ollama_model: str = "qwen2.5:7b"
-    ollama_base_url: str = "http://localhost:11434"
-    # transformers
-    load_in_4bit: bool = True
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "LLMConfig":
-        return cls(**{k: v for k, v in d.items() if k in cls.__annotations__})
+from .config import LLMConfig  # re-export for existing callers
 
 
 class BaseLLMClient:
