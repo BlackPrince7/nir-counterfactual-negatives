@@ -9,6 +9,10 @@ See [configuration and contract tests](docs/configuration.md) and
 [Git workflow](docs/version-control.md). The MVP descriptions below include
 historical design decisions; the production runners document their differences.
 
+The corrected baseline workflow (scripts 07–10) uses frozen train/dev/test splits,
+matched cohorts, fixed-step training and multi-relevant evaluation. See
+[baseline v2: bugs, fixes and runnable commands](docs/baseline-v2.md).
+
 Прототип системы генерации обучающих данных (пар/триплетов запрос-документ)
 с контролем уровня семантической сложности для дообучения моделей плотного
 семантического поиска (dense retrieval).

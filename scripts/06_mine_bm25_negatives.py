@@ -21,9 +21,8 @@ Phase PoC / BM25: hard negatives mining через лексический ран
   - НЕТ false-positive filter (CE/LLM). Стандарт литературы — top-K без
     фильтра. Если фильтровать, baseline становится "улучшенным" и теряет
     смысл как cleanly comparable условие.
-  - Self-exclusion ПО qid, а не по тексту: если в corpus есть дубликаты
-    d⁺ с другими qid (по факту они там есть после dedupe), они валидны
-    как negatives — это feature BM25.
+  - Self-exclusion по qid И нормализованному тексту: дубликат позитивного
+    документа с другим qid не является валидным негативом.
   - Dedupe corpus по нормализованному d_plus (защита от точных дублей).
 
 ФОРМАТ ВЫХОДА.
@@ -199,11 +198,14 @@ class BM25Index:
         k: int,
         exclude_qid: str | None = None,
         min_score: float = 0.0,
+        exclude_text: str | None = None,
     ) -> list[dict]:
         """
         Возвращает список dict с полями {corpus_idx, qid, d_plus, bm25_score, rank, tags}.
         rank — 1-indexed позиция в исходном top без exclude.
         """
+        if k < 1:
+            raise ValueError("k must be positive")
         q_tokens = self.tokenizer(query)
         if not q_tokens:
             return []
@@ -217,6 +219,8 @@ class BM25Index:
             score = float(scores[idx])
             doc = self.docs[idx]
             if exclude_qid is not None and doc["qid"] == exclude_qid:
+                continue
+            if exclude_text is not None and " ".join(doc["d_plus"].split()).casefold() == " ".join(exclude_text.split()).casefold():
                 continue
             if score < min_score:
                 break  # дальше будет только меньше
@@ -249,7 +253,8 @@ def mine_query(
       records: top-K negatives как flat-records, готовые к записи.
       diag: diagnostic info по этой query.
     """
-    hits = bm25.top_k(ex["query"], k=k, exclude_qid=ex["qid"], min_score=min_score)
+    hits = bm25.top_k(ex["query"], k=k, exclude_qid=ex["qid"],
+                      exclude_text=ex["d_plus"], min_score=min_score)
 
     # Self-match диагностика: top-1 ИСХОДНЫЙ rank до exclude. Если qid_to_idx
     # совпадает с первой позицией без exclude — это значит BM25 распознал d⁺

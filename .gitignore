@@ -84,6 +84,7 @@ data/*.parquet
 # через 07_build_train_data.py. НО оставляем split.json, summary.json, report.md
 # (мелкие, фиксируют состав ablation grid для воспроизводимости).
 data/train/*.jsonl
+data/baseline_*/*.jsonl
 
 # Но рукотворный sanity-набор оставляем в git
 !data/sanity_examples.jsonl
